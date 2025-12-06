@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CIFAR-10 圖片分類器 - FP32 vs INT8</title>
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            max-width: 900px;
+            width: 100%;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        
+        h1 {
+            text-align: center;
+            color: #667eea;
+            margin-bottom: 10px;
+            font-size: 2em;
+        }
+        
+        .subtitle {
+            text-align: center;
+            color: #666;
+            margin-bottom: 30px;
+        }
+        
+        .upload-area {
+            border: 3px dashed #667eea;
+            border-radius: 15px;
+            padding: 40px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-bottom: 20px;
+        }
+        
+        .upload-area:hover {
+            border-color: #764ba2;
+            background: #f8f9ff;
+        }
+        
+        .upload-area.dragover {
+            background: #e8eaff;
+            border-color: #764ba2;
+        }
+        
+        #fileInput {
+            display: none;
+        }
+        
+        .upload-icon {
+            font-size: 48px;
+            margin-bottom: 10px;
+        }
+        
+        .preview-container {
+            display: none;
+            margin: 20px 0;
+            text-align: center;
+        }
+        
+        #preview {
+            max-width: 300px;
+            max-height: 300px;
+            border-radius: 10px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+        
+        .results {
+            display: none;
+            margin-top: 30px;
+        }
+        
+        .comparison-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        
+        @media (max-width: 768px) {
+            .comparison-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+        
+        .model-section {
+            background: #f8f9ff;
+            border-radius: 10px;
+            padding: 20px;
+        }
+        
+        .model-section.fp32 {
+            border: 2px solid #4CAF50;
+        }
+        
+        .model-section.int8 {
+            border: 2px solid #FF9800;
+        }
+        
+        .model-title {
+            font-size: 1.1em;
+            font-weight: bold;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .model-title.fp32 {
+            color: #4CAF50;
+        }
+        
+        .model-title.int8 {
+            color: #FF9800;
+        }
+        
+        .prediction-item {
+            margin: 8px 0;
+        }
+        
+        .prediction-label {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+            font-size: 14px;
+        }
+        
+        .prediction-bar {
+            height: 25px;
+            background: #e0e0e0;
+            border-radius: 12px;
+            overflow: hidden;
+            position: relative;
+        }
+        
+        .prediction-fill {
+            height: 100%;
+            transition: width 0.5s ease;
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            padding-right: 8px;
+            color: white;
+            font-weight: bold;
+            font-size: 12px;
+        }
+        
+        .prediction-fill.fp32 {
+            background: linear-gradient(90deg, #4CAF50, #45a049);
+        }
+        
+        .prediction-fill.int8 {
+            background: linear-gradient(90deg, #FF9800, #f57c00);
+        }
+        
+        .summary {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 20px;
+            border-radius: 5px;
+            line-height: 1.8;
+        }
+        
+        .summary strong {
+            color: #856404;
+        }
+        
+        .loading {
+            display: none;
+            text-align: center;
+            margin: 20px 0;
+        }
+        
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .error {
+            background: #ffebee;
+            color: #c62828;
+            padding: 15px;
+            border-radius: 5px;
+            margin-top: 20px;
+            display: none;
+        }
+        
+        button {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 25px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: transform 0.2s;
+            display: block;
+            margin: 20px auto;
+        }
+        
+        button:hover {
+            transform: scale(1.05);
+        }
+        
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .status {
+            text-align: center;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+        
+        .status.loading {
+            background: #e3f2fd;
+            color: #1976d2;
+        }
+        
+        .status.success {
+            background: #e8f5e9;
+            color: #388e3c;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🖼️ CIFAR-10 圖片分類器</h1>
+        <p class="subtitle">ONNX ResNet18 - FP32 vs INT8 模型比較</p>
+        
+        <div id="modelStatus" class="status"></div>
+        
+        <div class="upload-area" id="uploadArea">
+            <div class="upload-icon">📤</div>
+            <p><strong>點擊或拖曳圖片到此處</strong></p>
+            <p style="color: #999; font-size: 14px; margin-top: 5px;">支援 JPG, PNG 格式</p>
+            <input type="file" id="fileInput" accept="image/*">
+        </div>
+        
+        <div class="preview-container" id="previewContainer">
+            <img id="preview" alt="Preview">
+        </div>
+        
+        <button id="predictBtn" style="display: none;">🔍 開始分類</button>
+        
+        <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <p style="margin-top: 10px;">正在推理中...</p>
+        </div>
+        
+        <div class="error" id="error"></div>
+        
+        <div class="results" id="results">
+            <div class="comparison-grid" id="comparisonGrid">
+                <div class="model-section fp32" id="fp32Section" style="display: none;">
+                    <div class="model-title fp32">🟢 FP32 Top-3 Prediction</div>
+                    <div id="fp32Results"></div>
+                </div>
+                
+                <div class="model-section int8">
+                    <div class="model-title int8">🟠 INT8 Top-3 Prediction</div>
+                    <div id="int8Results"></div>
+                </div>
+            </div>
+            
+            <div class="summary" id="summary"></div>
+        </div>
+    </div>
+
+    <script>
+        // 配置 - 與你的 Python 程式一致
+        const LABELS = ['plane','car','bird','cat','deer','dog','frog','horse','ship','truck'];
+        const CIFAR10_MEAN = [0.4914, 0.4822, 0.4465];
+        const CIFAR10_STD = [0.2470, 0.2435, 0.2616];
+        
+        let sessionFP32 = null;
+        let sessionINT8 = null;
+        let currentImage = null;
+        
+        // DOM 元素
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        const previewContainer = document.getElementById('previewContainer');
+        const preview = document.getElementById('preview');
+        const predictBtn = document.getElementById('predictBtn');
+        const loading = document.getElementById('loading');
+        const error = document.getElementById('error');
+        const results = document.getElementById('results');
+        const fp32Results = document.getElementById('fp32Results');
+        const int8Results = document.getElementById('int8Results');
+        const summary = document.getElementById('summary');
+        const modelStatus = document.getElementById('modelStatus');
+        const fp32Section = document.getElementById('fp32Section');
+        const comparisonGrid = document.getElementById('comparisonGrid');
+        
+        // 初始化模型
+        async function initModels() {
+            modelStatus.className = 'status loading';
+            modelStatus.textContent = '⏳ 正在載入模型...';
+            
+            try {
+                // 載入 FP32 模型
+                try {
+                    sessionFP32 = await ort.InferenceSession.create('image_classifier_model.onnx');
+                    console.log('FP32 模型載入成功');
+                } catch (e) {
+                    console.warn('FP32 模型載入失敗:', e.message);
+                }
+                
+                // 載入 INT8 模型
+                sessionINT8 = await ort.InferenceSession.create('image_classifier_model_int8.onnx');
+                console.log('INT8 模型載入成功');
+                
+                modelStatus.className = 'status success';
+                if (sessionFP32 && sessionINT8) {
+                    modelStatus.textContent = '✅ FP32 和 INT8 模型已載入';
+                    fp32Section.style.display = 'block';
+                } else if (sessionINT8) {
+                    modelStatus.textContent = '✅ INT8 模型已載入';
+                    comparisonGrid.style.gridTemplateColumns = '1fr';
+                }
+                
+            } catch (e) {
+                modelStatus.className = 'status';
+                modelStatus.style.background = '#ffebee';
+                modelStatus.style.color = '#c62828';
+                modelStatus.textContent = '❌ 模型載入失敗: ' + e.message;
+                showError('請確保 ONNX 模型文件在同一目錄下');
+            }
+        }
+        
+        // 圖片預處理 - 與你的 Python 程式一致
+        function preprocessImage(imgElement) {
+            return new Promise((resolve) => {
+                const canvas = document.createElement('canvas');
+                canvas.width = 32;
+                canvas.height = 32;
+                const ctx = canvas.getContext('2d');
+                
+                // 繪製並調整大小到 32x32
+                ctx.drawImage(imgElement, 0, 0, 32, 32);
+                const imageData = ctx.getImageData(0, 0, 32, 32);
+                const data = imageData.data;
+                
+                // 轉換為 float32 並 normalize (CHW 格式)
+                const float32Data = new Float32Array(3 * 32 * 32);
+                
+                for (let i = 0; i < 32 * 32; i++) {
+                    const r = data[i * 4] / 255.0;
+                    const g = data[i * 4 + 1] / 255.0;
+                    const b = data[i * 4 + 2] / 255.0;
+                    
+                    // 標準化 (與 Python 的 preprocess_32x32 一致)
+                    float32Data[i] = (r - CIFAR10_MEAN[0]) / CIFAR10_STD[0];
+                    float32Data[32 * 32 + i] = (g - CIFAR10_MEAN[1]) / CIFAR10_STD[1];
+                    float32Data[2 * 32 * 32 + i] = (b - CIFAR10_MEAN[2]) / CIFAR10_STD[2];
+                }
+                
+                resolve(float32Data);
+            });
+        }
+        
+        // Softmax - 與你的 Python 程式一致
+        function softmax(arr) {
+            const max = Math.max(...arr);
+            const exps = arr.map(x => Math.exp(x - max));
+            const sum = exps.reduce((a, b) => a + b, 0);
+            return exps.map(x => x / sum);
+        }
+        
+        // 預測 - 模仿你的 compare_fp32_int8 函數
+        async function predict() {
+            if (!currentImage || !sessionINT8) return;
+            
+            loading.style.display = 'block';
+            results.style.display = 'none';
+            error.style.display = 'none';
+            
+            try {
+                const inputData = await preprocessImage(currentImage);
+                const tensor = new ort.Tensor('float32', inputData, [1, 3, 32, 32]);
+                const feeds = { input: tensor };
+                
+                let fp32Time = 0, int8Time = 0;
+                let probsFP32 = null, probsINT8 = null;
+                
+                // FP32 推理
+                if (sessionFP32) {
+                    const t0 = performance.now();
+                    const outputFP32 = await sessionFP32.run(feeds);
+                    fp32Time = performance.now() - t0;
+                    const logitsFP32 = Array.from(outputFP32.logits.data);
+                    probsFP32 = softmax(logitsFP32);
+                }
+                
+                // INT8 推理
+                const t0 = performance.now();
+                const outputINT8 = await sessionINT8.run(feeds);
+                int8Time = performance.now() - t0;
+                const logitsINT8 = Array.from(outputINT8.logits.data);
+                probsINT8 = softmax(logitsINT8);
+                
+                displayResults(probsFP32, probsINT8, fp32Time, int8Time);
+                
+            } catch (e) {
+                showError('推理失敗: ' + e.message);
+                console.error(e);
+            } finally {
+                loading.style.display = 'none';
+            }
+        }
+        
+        // 獲取 Top-3
+        function getTop3(probs) {
+            return probs
+                .map((prob, idx) => ({ prob, idx, label: LABELS[idx] }))
+                .sort((a, b) => b.prob - a.prob)
+                .slice(0, 3);
+        }
+        
+        // 顯示結果 - 模仿你的 Gradio 輸出
+        function displayResults(probsFP32, probsINT8, fp32Time, int8Time) {
+            // 顯示 FP32 結果
+            if (probsFP32 && sessionFP32) {
+                const top3FP32 = getTop3(probsFP32);
+                fp32Results.innerHTML = top3FP32.map(item => `
+                    <div class="prediction-item">
+                        <div class="prediction-label">
+                            <span><strong>${item.label}</strong></span>
+                            <span>${(item.prob * 100).toFixed(1)}%</span>
+                        </div>
+                        <div class="prediction-bar">
+                            <div class="prediction-fill fp32" style="width: ${item.prob * 100}%"></div>
+                        </div>
+                    </div>
+                `).join('');
+            }
+            
+            // 顯示 INT8 結果
+            const top3INT8 = getTop3(probsINT8);
+            int8Results.innerHTML = top3INT8.map(item => `
+                <div class="prediction-item">
+                    <div class="prediction-label">
+                        <span><strong>${item.label}</strong></span>
+                        <span>${(item.prob * 100).toFixed(1)}%</span>
+                    </div>
+                    <div class="prediction-bar">
+                        <div class="prediction-fill int8" style="width: ${item.prob * 100}%"></div>
+                    </div>
+                </div>
+            `).join('');
+            
+            // Summary - 與你的 Python 程式格式一致
+            let summaryText = `<strong>🎯 預測結果:</strong> ${top3INT8[0].label} (${(top3INT8[0].prob * 100).toFixed(1)}%)<br>`;
+            summaryText += `<strong>⚡ INT8 inference time:</strong> ${int8Time.toFixed(2)} ms<br>`;
+            
+            if (probsFP32 && sessionFP32) {
+                summaryText += `<strong>⚡ FP32 inference time:</strong> ${fp32Time.toFixed(2)} ms<br>`;
+                const speedup = fp32Time / int8Time;
+                summaryText += `<strong>🚀 Speedup (FP32/INT8):</strong> ${speedup.toFixed(2)}×`;
+            }
+            
+            summary.innerHTML = summaryText;
+            results.style.display = 'block';
+        }
+        
+        // 顯示錯誤
+        function showError(message) {
+            error.textContent = message;
+            error.style.display = 'block';
+        }
+        
+        // 處理文件選擇
+        function handleFile(file) {
+            if (!file || !file.type.startsWith('image/')) {
+                showError('請選擇有效的圖片文件');
+                return;
+            }
+            
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                preview.src = e.target.result;
+                previewContainer.style.display = 'block';
+                predictBtn.style.display = 'block';
+                results.style.display = 'none';
+                error.style.display = 'none';
+                
+                currentImage = new Image();
+                currentImage.src = e.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+        
+        // 事件監聽
+        uploadArea.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) handleFile(e.target.files[0]);
+        });
+        
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+        
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+        
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            if (e.dataTransfer.files.length > 0) handleFile(e.dataTransfer.files[0]);
+        });
+        
+        predictBtn.addEventListener('click', predict);
+        
+        // 初始化
+        initModels();
+    </script>
+</body>
+</html>
